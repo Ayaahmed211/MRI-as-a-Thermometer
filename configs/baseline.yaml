@@ -1,0 +1,28 @@
+name: baseline                  # اسم التجربة (هنعمل بيه مجلد النتائج)
+phantom: phantom/phantom.npz    # ملف المخ بتاعك
+
+frame_dt_s: 3                   # صورة كل 3 ثواني
+field_T: 3.0                    # المجال المغناطيسي بالتسلا (1.5 او 3.0)
+
+sequence:                       # اعدادات التصوير (شغل العضو 3)
+  TE_ms: 20
+  TR_ms: 30
+  flip_deg: 20
+
+heating:                        # اعدادات التسخين (شغل العضو 2)
+  power: 1.0
+  duration_s: 60                # مدة التسخين
+  cooldown_s: 60                # مدة التبريد بعده
+  focus_fwhm_mm: 9
+  peak_C: 65                    # القمة المطلوبة في آخر التسخين              # عرض بؤرة التسخين (5 الى 6 مم على الاقل)
+
+scan:                           # المشاكل اللي بنضيفها (شغلك انتِ)
+  snr: 50                       # الضوضاء: رقم كبير = صورة انضف
+  motion: false                 # حركة التنفس: true او false
+  motion_amp_mm: 2.0
+  breathing_period_s: 4.0
+  b0_inhomogeneity: true        # خطأ المجال الثابت
+  b0_amp_hz: 20.0
+  b0_drift_hz_per_s: 0.0        # انجراف المجال (0 = بدون)
+
+seed: 0                         # رقم ثابت عشان النتايج تتكرر نفسها
