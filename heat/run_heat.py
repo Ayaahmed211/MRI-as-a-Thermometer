@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from solver import solve, TA
+from properties import build_props
 
 
 def run_heat(cfg, out=None, show=False):
@@ -16,7 +17,7 @@ def run_heat(cfg, out=None, show=False):
     peak_C = h.get("peak_C", 65)
     frame_dt = cfg["frame_dt_s"]
 
-    props = dict(np.load("heat/thermal_props.npz"))
+    props = build_props(cfg["phantom"])
     ph = np.load(cfg["phantom"])
     xs, ys = ph["x_axis"], ph["y_axis"]
     cx, cy = ph["tumor_center_m"]

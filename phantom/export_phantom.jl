@@ -11,5 +11,6 @@ npzwrite("phantom/phantom_raw.npz", Dict(
     "T1" => obj.T1,
     "T2" => obj.T2,
     "T2s" => obj.T2s,
+    "dw"  => obj.Δw,
 ))
 println("saved successfully")
