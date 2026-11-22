@@ -15,7 +15,7 @@ simulation we know the true temperature.
 |---|---|---|
 | 1. Virtual patient, scan conditions, pipeline driver | Member 1 | Done |
 | 2. Heat model, thermal dose, true ablation zone | Member 2 | Done (report section left) |
-| 3. MRI sequence and simulation (Pypulseq + KomaMRI) | Member 3 | To do |
+| 3. MRI sequence and simulation (Pypulseq + KomaMRI) | Member 3 | Done |
 | 4. Reconstruction and PRF thermometry | Member 4 | To do |
 | 5. Evaluation, experiments, figures, animation | Member 5 | To do |
 
@@ -29,7 +29,7 @@ pip install -r requirements.txt
 python run_pipeline.py --config configs/baseline.yaml
 ```
 
-This runs stages 1 and 2 for real (stages 3 to 5 print "not implemented yet") and writes
+This runs stages 1, 2, and 3 for real (stages 4 and 5 print "not implemented yet") and writes
 everything to `results/baseline/`. The `results/` folder is **not** in Git, so everyone
 generates it locally with the command above.
 
@@ -42,7 +42,7 @@ Julia and KomaMRI are only needed to regenerate the raw brain
 configs/        one yaml file per experiment (all numbers live here)
 phantom/        Member 1: virtual brain, tumor, noise / motion / field-error tools
 heat/           Member 2: thermal properties, bioheat solver, heat source, thermal dose
-mri/            Member 3 (empty for now)
+mri/            Member 3: pulse sequence design, scanner simulation, validation tests
 recon/          Member 4 (empty for now)
 eval/           Member 5 (empty for now)
 results/        generated output, not in Git
@@ -173,22 +173,78 @@ Note for Members 3 and 4: in `baseline` the tumor warms by about 28 degC. At 3 T
 phase changes by about 0.16 rad per degC, so it passes pi after about 19.6 degC. **The phase will wrap
 and must be unwrapped.**
 
+## Member 3: MRI Sequence Design and Scanner Simulation (`mri/`)
+
+Member 3 implements the pulse sequence design and MRI scanner simulation, taking the ground-truth
+temperature maps from Block 2 and simulating the raw complex k-space and complex images measured by an MRI scanner.
+
+| File | What it does |
+|---|---|
+| `gre_sequence.py` | PyPulseq: Designs a 2D Spoiled Gradient Echo (GRE) sequence (RF sinc pulse, slice selection + rephaser, phase-encoding table, readout gradient + ADC, rewinder gradients, slice spoiler, and RF spoiling). Checks timing and gradient limits; saves `gre_sequence.seq`. |
+| `frequency_shift.py` | Computes the water PRF shift ($\Delta f = \text{hz\_per\_degC}(B_0) \times (T - 37)$) on water-containing pixels only (strictly zero on fat pixels using `fat_mask`). Combines static $B_0$ field error, linear $B_0$ drift, and chemical shift into total off-resonance. |
+| `simulate_mri.py` | Complete sequence-based scanner simulation engine across all 41 frames. Handles baseline at 37 °C, dynamic heating/cooling frames, breathing motion displacement via `apply_motion()`, Ernst steady-state magnetization, $T_2^*$ decay, phase accumulation, k-space Fourier encoding, post-simulation Gaussian noise calibration (`add_noise`), and serialization to HDF5/NumPy. |
+| `simulate_koma.jl` | KomaMRI (Julia): Reads `gre_sequence.seq`, builds `KomaMRI.Phantom` from `phantom.npz`, and executes Bloch simulation using `KomaMRI.simulate(obj, seq, sys)`. |
+| `validate_mri.py` | Complete test suite implementing Tests 1 through 9. |
+
+### How PyPulseq and KomaMRI Work Together
+
+1. **PyPulseq** models the physical MRI sequence: timing, RF pulse shape, gradient waveforms, ADC sampling events, and safety/raster constraints. It generates the standard open-file sequence format `gre_sequence.seq`.
+2. **KomaMRI** (and our sequence-based discrete Bloch simulator in Python) takes the exact PyPulseq sequence and propagates the magnetization of the virtual brain phantom spins over time, accounting for $T_1$, $T_2^*$, proton density, and the temperature-dependent off-resonance $\Delta f(x, y, t)$.
+3. Noise is added to k-space **after** simulation using `add_noise()`, allowing the exact same clean simulation to be evaluated across multiple SNR levels.
+
+### Validation Test Suite (`python mri/validate_mri.py`)
+
+Run `python mri/validate_mri.py` to execute all 9 self-tests:
+- **Test 1 – Sequence validity:** Validates PyPulseq sequence timing, raster constraints, and confirms TE (20.00 ms) and TR (30.00 ms) match configured values.
+- **Test 2 – Baseline scan:** Confirms the baseline frame at 37 °C has zero thermal frequency shift ($\Delta f_{\text{heat}} = 0$).
+- **Test 3 – Temperature-dependent frequency shift:** Confirms a $+10$ °C rise produces $-12.774$ Hz in water at 3 T (0.00% error) and strictly 0.0 Hz in fat.
+- **Test 4 – Phase validation against theory:** Validates noise-free phase difference against $\Delta\phi = \gamma \alpha B_0 \text{TE} \Delta T$ (measured error $0.0000\% < 1.0\%$).
+- **Test 5 – Static $B_0$ field error:** Confirms baseline subtraction cancels static $B_0$ inhomogeneity down to $2.44 \times 10^{-15}$ rad.
+- **Test 6 – $B_0$ drift:** Confirms linear drift evolution over time (mimicking fake heating if uncorrected).
+- **Test 7 – Breathing motion:** Confirms phantom and temperature map move by the exact commanded displacement ($+2.00$ mm) while keeping all maps aligned.
+- **Test 8 – Complex output:** Confirms generated k-space and reconstructed images contain non-zero real and imaginary components and preserve phase.
+- **Test 9 – Noise addition:** Confirms post-simulation noise matches requested SNR (measured SNR 10.00, 24.99, 49.98, 99.95 for target 10, 25, 50, 100).
+
+### Outputs saved to `results/<name>/`
+
+| File | Shape / Format | Contents |
+|---|---|---|
+| `kspace.h5` | `(41, 103, 86)` complex128 | Complex k-space for baseline and 40 dynamic frames, plus clean k-space dataset, frame times `t`, TE, TR, flip angle, $B_0$, matrix, FOV, slice thickness, SNR. |
+| `mri_images.npy` | `(41, 103, 86)` complex128 | Reconstructed complex MRI images across all frames. |
+| `mri_magnitude.npy` | `(41, 103, 86)` float64 | Magnitude images ($|S|$). |
+| `mri_phase.npy` | `(41, 103, 86)` float64 | Phase images ($\arg(S)$ in $[-\pi, \pi]$). |
+| `frequency_shift.npy` | `(41, 103, 86)` float64 | Heat-induced frequency shift maps $\Delta f_{\text{heat}}$ in Hz. |
+| `gre_sequence.seq` | Pulseq v1.4+ file | Generated PyPulseq sequence file. |
+| `mri_preview.png` | 6-panel PNG | Diagnostic figure showing baseline, peak heating, phase difference, PRF shift, and tumor time-series. |
+
 ## How to use these outputs
 
-**Member 3 (MRI simulation)** needs `phantom/phantom.npz`, `results/<name>/temp_true.npy`, `t.npy`, and the tools in
-`phantom/scan_conditions.py`. Frequency shift per frame:
+**Member 4 (reconstruction & thermometry)** should load `kspace.h5` or `mri_images.npy` from `results/<name>/`:
 
 ```python
+import h5py
 import numpy as np
-from phantom.scan_conditions import hz_per_degC, b0_map, apply_motion
 
-T = np.load("results/baseline/temp_true.npy")        # (41, 103, 86) degC
-df_heat = hz_per_degC(3.0) * (T - 37.0)              # Hz, per frame
-# add b0_map(...) and b0_drift(...), put the total into the phantom's off-resonance, simulate each frame
+# Option A: From kspace.h5
+with h5py.File("results/baseline/kspace.h5", "r") as f:
+    kspace = f["kspace"][:]               # shape (41, 103, 86), complex
+    t = f["t"][:]                         # shape (41,), seconds
+    TE = f["TE"][()]                      # echo time in seconds (0.02 s)
+    B0 = f["B0"][()]                      # field in Tesla (3.0 T)
+
+# Reconstruct complex images if starting from k-space:
+# Note: k-space convention is unshifted (DC at [0,0]), reconstructed via:
+images = np.fft.ifft2(kspace, axes=(-2, -1), norm="ortho")
+
+# Option B: Or directly load pre-reconstructed complex images:
+images = np.load("results/baseline/mri_images.npy")
+
+# Complex phase difference against baseline (frame 0):
+dphi = np.angle(images * np.conj(images[0]))   # shape (41, 103, 86)
+
+# Next: Member 4 unwraps dphi, masks out fat/background, and converts to temperature:
+# dT = dphi / (2 * np.pi * hz_per_degC(B0) * TE)
 ```
-
-Save k-space as `results/<name>/kspace.h5` with `B0, TE, TR, flip angle` and frame times, and replace
-`stage3_mri` in `run_pipeline.py`.
 
 **Member 4 (thermometry)** should reuse the dose function so the estimated and true ablation use the same formula:
 

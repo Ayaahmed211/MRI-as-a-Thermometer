@@ -8,6 +8,11 @@ sequence:                       # اعدادات التصوير (شغل العض
   TE_ms: 20
   TR_ms: 30
   flip_deg: 20
+  slice_thickness_mm: 5.0
+  matrix_y: 103
+  matrix_x: 86
+  fov_y_mm: 206.0
+  fov_x_mm: 172.0
 
 heating:                        # اعدادات التسخين (شغل العضو 2)
   power: 1.0

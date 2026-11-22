@@ -20,7 +20,8 @@ def stage2_heat(cfg, out):
 
 
 def stage3_mri(cfg, out):
-    print("  [not implemented yet]  Member 3: MRI simulation -> k-space")
+    from mri.simulate_mri import run_mri_stage
+    run_mri_stage(cfg, out)
 
 
 def stage4_recon(cfg, out):
